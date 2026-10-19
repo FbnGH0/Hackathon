@@ -21,12 +21,49 @@ HERE = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) el
 LOG = logging.getLogger("lms-sync")
 
 
-def load_config(path: Path):
-    config = json.loads(path.read_text(encoding="utf-8-sig"))
-    parsed = urlparse(config["base_url"])
+# Every Singapore polytechnic (and ITE) uses POLITEMall, the same Brightspace platform.
+# Pick one with "school": "TP" (or SP / NP / NYP / RP / ITE) in config.local.json.
+# Known addresses are pre-filled; for the rest, `login` starts at the shared POLITEMall
+# portal and saves whichever school address you land on after signing in.
+POLITEMALL_PORTAL = "https://politemall.polite.edu.sg"
+POLY_PRESETS = {
+    "TP": ("Temasek Polytechnic", "https://tplms.polite.edu.sg"),
+    "RP": ("Republic Polytechnic", "https://rplms.polite.edu.sg"),
+    "SP": ("Singapore Polytechnic", None),
+    "NP": ("Ngee Ann Polytechnic", None),
+    "NYP": ("Nanyang Polytechnic", None),
+    "ITE": ("Institute of Technical Education", None),
+}
+
+
+def resolve_school(config):
+    """Accept a short code ("TP") or full name; fill in the school name and known base_url."""
+    raw = str(config.get("school", "")).strip()
+    code = raw.upper()
+    if code not in POLY_PRESETS:
+        code = next((k for k, (name, _) in POLY_PRESETS.items() if name.lower() == raw.lower()), None)
+    if code:
+        name, known_url = POLY_PRESETS[code]
+        config["school"] = name
+        config["school_code"] = code
+        if not config.get("base_url") and known_url:
+            config["base_url"] = known_url
+    elif not raw:
+        raise ValueError('Set "school" in config.local.json, e.g. "TP", "SP", "NP", "NYP", "RP" or "ITE".')
+    return config
+
+
+def check_base_url(url):
+    parsed = urlparse(url)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.query:
         raise ValueError("School base_url must be an HTTPS origin.")
-    config["base_url"] = config["base_url"].rstrip("/")
+    return f"https://{parsed.netloc}"
+
+
+def load_config(path: Path):
+    config = resolve_school(json.loads(path.read_text(encoding="utf-8-sig")))
+    config["config_path"] = str(path)
+    config["base_url"] = check_base_url(config["base_url"]) if config.get("base_url") else ""
     target = urlparse(config.get("butler_url", "http://127.0.0.1:3000"))
     if target.hostname not in ("localhost", "127.0.0.1", "::1") or target.scheme not in ("http", "https"):
         raise ValueError("Butler bridge must run on this computer.")
@@ -104,7 +141,8 @@ def configure_bridge(config):
         if model:
             additions.append("OLLAMA_SERVER_MODEL=" + model)
     if "LMS_ALLOWED_ORIGIN=" not in env:
-        additions.append("LMS_ALLOWED_ORIGIN=" + config["base_url"])
+        # Butler also accepts any https://*.polite.edu.sg school, so this only matters for non-POLITEMall schools.
+        additions.append("LMS_ALLOWED_ORIGIN=" + (config["base_url"] or POLITEMALL_PORTAL))
     if "LMS_CONTENT_AI_ENABLED=" not in env:
         additions.append("LMS_CONTENT_AI_ENABLED=true")
     env_path.parent.mkdir(parents=True, exist_ok=True)
@@ -134,24 +172,55 @@ def push(config, snapshot):
     return result
 
 
+def remember_base_url(config, base_url):
+    """Write the detected school address back into config.local.json so sync uses it next time."""
+    path = Path(config["config_path"])
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    data["base_url"] = base_url
+    atomic_json(path, data)
+    config["base_url"] = base_url
+    LOG.info("Detected your school's POLITEMall address: %s (saved to %s)", base_url, path.name)
+
+
+async def signed_in(page):
+    """True once Brightspace accepts this session (works whatever the homepage looks like)."""
+    if await page.get_by_role("heading", name="My Courses", exact=True).count():
+        return True
+    try:
+        return await page.evaluate("""async () => {
+            const v = await fetch('/d2l/api/versions/', { credentials: 'include' });
+            if (!v.ok) return false;
+            const lp = (await v.json()).find(x => x.ProductCode === 'lp');
+            if (!lp) return false;
+            const r = await fetch(`/d2l/api/lp/${lp.LatestVersion}/users/whoami`, { credentials: 'include' });
+            return r.ok;
+        }""")
+    except Exception:
+        return False
+
+
 async def login(config):
     from playwright.async_api import async_playwright
+    expected = urlparse(config["base_url"]).hostname if config["base_url"] else None
     async with async_playwright() as p:
         browser = await p.chromium.launch(channel=config.get("browser_channel", "msedge"), headless=False)
         context = await browser.new_context()
         page = await context.new_page()
-        await page.goto(config["base_url"] + "/d2l/home")
-        LOG.info("Complete the school login in the new Edge window. The session will be saved encrypted automatically.")
+        await page.goto((config["base_url"] or POLITEMALL_PORTAL) + "/d2l/home")
+        LOG.info("Complete the %s login in the new Edge window. The session will be saved encrypted automatically.", config["school"])
         deadline = time.monotonic() + 600
         try:
             while time.monotonic() < deadline:
                 parsed = urlparse(page.url)
-                if parsed.hostname == urlparse(config["base_url"]).hostname and parsed.path.startswith("/d2l/home"):
-                    if await page.get_by_role("heading", name="My Courses", exact=True).count():
-                        state = await context.storage_state()
-                        save_secret(Path(config["private_dir"]) / "session.enc", state)
-                        LOG.info("School session saved encrypted; no password was stored.")
-                        return 0
+                host = parsed.hostname or ""
+                on_school = host == expected if expected else (host.endswith(".polite.edu.sg") and host != urlparse(POLITEMALL_PORTAL).hostname)
+                if parsed.scheme == "https" and on_school and parsed.path.startswith("/d2l/home") and await signed_in(page):
+                    if not expected:
+                        remember_base_url(config, f"https://{parsed.netloc}")
+                    state = await context.storage_state()
+                    save_secret(Path(config["private_dir"]) / "session.enc", state)
+                    LOG.info("School session saved encrypted; no password was stored.")
+                    return 0
                 await asyncio.sleep(2)
             raise RuntimeError("Login was not completed within 10 minutes.")
         finally:
@@ -159,6 +228,8 @@ async def login(config):
 
 
 async def sync(config, metadata_only=False):
+    if not config["base_url"]:
+        raise SystemExit("Your school's POLITEMall address isn't known yet. Run `lms_sync.py login` first; it detects and saves it.")
     from brightspace import Brightspace, LoginRequired, AccessUnavailable
     from playwright.async_api import async_playwright
     private = Path(config["private_dir"])

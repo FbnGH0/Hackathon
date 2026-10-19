@@ -70,7 +70,7 @@ export function buildLmsFeed(snapshot: LmsSnapshot, previous: LmsFeed, now = Dat
     const noteId = `${prefix}${course.id}-index`;
     courses.set(noteId, { ...course, school: snapshot.school, noteId });
     const content = [`# ${course.moduleName}`, "", `学校：${snapshot.school}`, "", ...course.lessons.flatMap(l => [
-      `## ${l.number === null ? "Resources" : `Lesson ${String(l.number).padStart(2, "0")}${l.endNumber && l.endNumber !== l.number ? `-${String(l.endNumber).padStart(2, "0")}` : ""}`} · ${l.title}`,
+      `## ${l.number === null ? "Resources" : `${l.kind ?? "Lesson"} ${String(l.number).padStart(2, "0")}${l.endNumber && l.endNumber !== l.number ? `-${String(l.endNumber).padStart(2, "0")}` : ""}`} · ${l.title}`,
       ...l.materials.map(m => `- [${m.title}](${m.url})${m.filePath ? ` · 已归档：${m.filePath}` : ""}`), "",
     ]), "## 学校通知", "", ...course.announcements.map(a => `- [${a.title}](${a.url})\n${a.text}`)].join("\n");
     const oldNote = notes.get(noteId);

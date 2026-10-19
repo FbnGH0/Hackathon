@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from core import assignment, component, content_lessons, export_course, iso, Ledger, submission_state, lesson_spec
+from core import assignment, component, content_lessons, export_course, iso, Ledger, submission_state, lesson_spec, week_spec
 from secrets_store import save_secret, load_secret
 
 
@@ -19,6 +19,27 @@ class SyncTests(unittest.TestCase):
         self.assertTrue(lessons[0]["materials"][0]["downloadable"])
         self.assertFalse(lessons[1]["materials"][0]["downloadable"])
         self.assertIn("Week 1", lessons[0]["materials"][0]["sourcePath"])
+
+    def test_tp_style_week_folders(self):
+        toc = {"Modules": [
+            {"ModuleId": 1, "Title": "Lesson Materials", "Modules": [
+                {"ModuleId": 2, "Title": "Week 1: Supervised Learning 1", "Topics": [{"TopicId": 20, "Title": "Slides", "Url": "/content/a.pptx"}]},
+                {"ModuleId": 3, "Title": "Week 1 Tutorial (F2F)", "Topics": [{"TopicId": 21, "Title": "Tutorial", "Url": "/content/b.pdf"}]},
+                {"ModuleId": 4, "Title": "WK02 - AWS IoT Setup", "Topics": [{"TopicId": 22, "Title": "Guide", "Url": "/content/c.pdf"}]},
+                {"ModuleId": 5, "Title": "Week 5 Learning Materials", "Modules": [
+                    {"ModuleId": 6, "Title": "Lesson 1 - Flipped Learning", "Topics": [{"TopicId": 23, "Title": "Video", "Url": "/content/d.mp4"}]}]},
+                {"ModuleId": 7, "Title": "Week 3a: ListView", "Topics": [{"TopicId": 24, "Title": "Notes", "Url": "/content/e.pdf"}]},
+            ]},
+            {"ModuleId": 8, "Title": "Assessment", "Topics": [{"TopicId": 25, "Title": "Brief", "Url": "/content/f.pdf"}]},
+        ]}
+        lessons = content_lessons(toc, "https://tplms.polite.edu.sg", "1")
+        self.assertEqual([(l.get("kind"), l["number"]) for l in lessons], [("Week", 1), ("Lesson", 1), ("Week", 2), ("Week", 3), (None, None)])
+        self.assertEqual(len(lessons[0]["materials"]), 2)
+        self.assertEqual(week_spec("Week 1 (19-25 Oct)"), (1, 1))
+        self.assertEqual(week_spec("Pre-Week 3 Lesson"), (3, 3))
+        self.assertEqual(week_spec("Week 11b: Applied AI"), (11, 11))
+        self.assertEqual(week_spec("Week 1-2 Revision"), (1, 2))
+        self.assertIsNone(week_spec("Weekly Quiz"))
 
     def test_submission_and_absolute_deadline(self):
         self.assertEqual(lesson_spec("G133_L06_Lesson Slides"), (6, 6))

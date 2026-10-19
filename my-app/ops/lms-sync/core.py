@@ -31,36 +31,76 @@ def lesson_spec(title: str):
     return (start, end) if end >= start else (start, start)
 
 
+def week_spec(title: str):
+    """Week folders as used by e.g. TP: "Week 1", "Week 1a", "WK01", "Week 1 (19-25 Oct)", "Pre-Week 3", "Week 1-2"."""
+    match = re.search(r"(?<![A-Za-z0-9])(?:week|wk)\s*[-_ ]*0*(\d+)[a-z]?(?:\s*[-–_]\s*(?:week|wk)?\s*0*(\d+)(?![\d)]))?", title, re.I)
+    if not match:
+        return None
+    start, end = int(match[1]), int(match[2] or match[1])
+    return (start, end) if end >= start else (start, start)
+
+
+def group_spec(title: str):
+    """(kind, start, end) for a lesson or week folder. Lesson numbers win, so RP-style "Week 1 / Lesson 2" keeps lessons."""
+    spec = lesson_spec(title)
+    if spec is not None:
+        return ("Lesson", *spec)
+    spec = week_spec(title)
+    if spec is not None:
+        return ("Week", *spec)
+    return None
+
+
 def lesson_number(title: str):
     value = lesson_spec(title)
     return value[0] if value else None
 
 
 def content_lessons(toc: dict, base: str, course_id: str) -> list:
-    """Flatten Package/Week while preserving explicit lesson numbers and source hierarchy.
+    """Flatten Package/Week while preserving explicit lesson/week numbers and source hierarchy.
 
+    Groups are "Lesson N" (RP style) or "Week N" (TP style); the nearest numbered folder wins.
     Non-lesson resources go in Resources, not a made-up course session.
     IDs disambiguate two school lessons with the same number.
+    Week groups are only created once they hold a material, so a week that just wraps lessons stays invisible.
     """
     lessons = {}
+    pending = {}
+
+    def group_id(spec):
+        kind, start, end = spec
+        return f"{kind.lower()}-{start}-{end}"
+
+    def ensure(gid):
+        if gid not in lessons and gid in pending:
+            lessons[gid] = pending.pop(gid)
+        return gid
 
     def walk(node, ancestors, inherited=None):
         if node.get("IsHidden") or node.get("IsLocked"):
             return
         title = node.get("Title", "Resources")
-        spec = lesson_spec(title)
+        spec = group_spec(title)
         current = inherited
         if spec is not None:
-            current = f"lesson-{spec[0]}-{spec[1]}"
-            lessons.setdefault(current, {"id": current, "number": spec[0], "endNumber": spec[1], "title": title, "materials": []})
+            current = group_id(spec)
+            entry = {"id": current, "kind": spec[0], "number": spec[1], "endNumber": spec[2], "title": title, "materials": []}
+            if spec[0] == "Lesson":
+                lessons.setdefault(current, entry)
+            elif current not in lessons:
+                pending.setdefault(current, entry)
         for topic in sorted(node.get("Topics", []), key=lambda t: t.get("SortOrder", 0)):
             if topic.get("IsHidden") or topic.get("IsLocked") or topic.get("IsBroken"):
                 continue
-            topic_spec = lesson_spec(topic.get("Title", ""))
+            topic_spec = group_spec(topic.get("Title", ""))
             target = current
             if topic_spec is not None:
-                target = f"lesson-{topic_spec[0]}-{topic_spec[1]}"
-                lessons.setdefault(target, {"id": target, "number": topic_spec[0], "endNumber": topic_spec[1], "title": f"Lesson {topic_spec[0]}" if topic_spec[0] == topic_spec[1] else f"Lessons {topic_spec[0]}–{topic_spec[1]}", "materials": []})
+                kind, start, end = topic_spec
+                target = group_id(topic_spec)
+                if target not in lessons and target not in pending:
+                    pending[target] = {"id": target, "kind": kind, "number": start, "endNumber": end, "title": f"{kind} {start}" if start == end else f"{kind}s {start}–{end}", "materials": []}
+            if target is not None:
+                ensure(target)
             if target is None:
                 target = "resources"
                 lessons.setdefault(target, {"id": target, "number": None, "title": "Resources", "materials": []})
@@ -81,7 +121,7 @@ def content_lessons(toc: dict, base: str, course_id: str) -> list:
 
     for root in toc.get("Modules", []):
         walk(root, [])
-    return sorted(lessons.values(), key=lambda l: (l["number"] is None, l["number"] or 0, l["id"]))
+    return sorted(lessons.values(), key=lambda l: (l["number"] is None, l["number"] or 0, l.get("kind") != "Week", l["id"]))
 
 
 def submission_state(entities):
@@ -116,7 +156,7 @@ def export_course(root: Path, school: str, course: dict):
     used = {}
     lines = [f"# {course['moduleName']}", "", f"学校：{school}", "", "## 课程资料", ""]
     for lesson in course["lessons"]:
-        name = f"Lesson {lesson['number']:02d}" if lesson["number"] is not None else "Resources"
+        name = f"{lesson.get('kind', 'Lesson')} {lesson['number']:02d}" if lesson["number"] is not None else "Resources"
         if lesson.get("endNumber") and lesson["endNumber"] != lesson["number"]:
             name += f"-{lesson['endNumber']:02d}"
         if name in used and used[name] != lesson["id"]:

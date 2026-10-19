@@ -15,6 +15,7 @@ export const lmsSnapshotSchema = z.object({
     id, moduleName: title,
     lessons: z.array(z.object({
       id, number: z.number().int().nonnegative().nullable(), title,
+      kind: z.enum(["Lesson", "Week"]).optional(),
       endNumber: z.number().int().nonnegative().optional(),
       directory: z.string().max(200).optional(),
       materials: z.array(z.object({

@@ -23,7 +23,7 @@ export function selectCourseContext(feed: LmsFeed, query: string, noteId?: strin
       const excerpt = material.text.slice(offset, offset + 1400);
       const haystack = `${course.moduleName} ${lesson.title} ${material.title} ${excerpt}`.toLowerCase();
       const score = terms.reduce((sum, term) => sum + (haystack.includes(term) ? 1 : 0), 0);
-      candidates.push({ label: `${course.moduleName} / ${lesson.number === null ? "Resources" : `Lesson ${lesson.number}`} / ${material.title}`,
+      candidates.push({ label: `${course.moduleName} / ${lesson.number === null ? "Resources" : `${lesson.kind ?? "Lesson"} ${lesson.number}`} / ${material.title}`,
         url: material.url, excerpt, score, truncated: material.textStatus === "truncated" });
     }
   }

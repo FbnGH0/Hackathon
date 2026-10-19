@@ -52,7 +52,10 @@ class Brightspace:
                     body = await response.body()
                     if len(body) > limit:
                         raise AccessUnavailable("File exceeds the configured download size limit.")
-                    if "text/html" in response.headers.get("content-type", "") and b"login" in body[:4096].lower():
+                    # A real sign-in page has a password box. Course pages that merely mention "login"
+                    # (e.g. TP's "Login" help page) must not be mistaken for an expired session.
+                    head = body[:20000].lower()
+                    if "text/html" in response.headers.get("content-type", "") and (b'type="password"' in head or b"type='password'" in head):
                         raise LoginRequired("File request returned a login page.")
                     return body
                 if "json" not in response.headers.get("content-type", ""):

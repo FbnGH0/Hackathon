@@ -22,8 +22,13 @@ export async function POST(req: Request) {
   const parsed = lmsSnapshotSchema.safeParse(raw);
   if (!parsed.success) return Response.json({ error: "Invalid LMS snapshot.", issues: parsed.error.issues.map(i => ({ path: i.path, message: i.message })) }, { status: 400 });
   const snapshot = parsed.data;
-  const allowed = process.env.LMS_ALLOWED_ORIGIN || "https://rplms.polite.edu.sg";
-  if (new URL(snapshot.baseUrl).origin !== new URL(allowed).origin) return Response.json({ error: "School origin is not configured." }, { status: 403 });
+  // Accept any Singapore polytechnic / ITE POLITEMall site (https://*.polite.edu.sg),
+  // plus any extra comma-separated origins in LMS_ALLOWED_ORIGIN (for non-POLITEMall schools).
+  const base = new URL(snapshot.baseUrl);
+  const extra = (process.env.LMS_ALLOWED_ORIGIN || "").split(",").map(s => s.trim()).filter(Boolean);
+  const isPolitemall = base.protocol === "https:" && base.hostname.endsWith(".polite.edu.sg");
+  const isExtra = extra.some(o => { try { return new URL(o).origin === base.origin; } catch { return false; } });
+  if (!isPolitemall && !isExtra) return Response.json({ error: "School origin is not configured." }, { status: 403 });
   let newIds: string[] = [];
   const feed = updateLmsFeed(old => {
     const next = buildLmsFeed(snapshot, old);

@@ -1,6 +1,5 @@
 {
-  "school": "Republic Polytechnic",
-  "base_url": "https://rplms.polite.edu.sg",
+  "school": "TP",
   "timezone": "Asia/Singapore",
   "interval_minutes": 60,
   "output_dir": "courses",

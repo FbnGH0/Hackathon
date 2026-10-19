@@ -2,11 +2,17 @@ import { timingSafeEqual } from "node:crypto";
 
 /** This repository is a single-user app. New school-data routes are local-only. */
 export function isLocalLmsRequest(request: Request) {
-  const host = new URL(request.url).hostname;
-  if (!["localhost", "127.0.0.1", "[::1]"].includes(host)) return false;
+  // localhost, 127.0.0.1 and ::1 are all this computer; treat them as equivalent
+  // (Next.js reports "localhost" unless started with -H, while the browser may use 127.0.0.1).
+  const LOCAL = ["localhost", "127.0.0.1", "[::1]"];
+  const url = new URL(request.url);
+  if (!LOCAL.includes(url.hostname)) return false;
   const origin = request.headers.get("origin");
   try {
-    if (origin && new URL(origin).origin !== new URL(request.url).origin) return false;
+    if (origin) {
+      const o = new URL(origin);
+      if (!LOCAL.includes(o.hostname) || o.port !== url.port) return false;
+    }
   } catch { return false; }
   return request.headers.get("sec-fetch-site") !== "cross-site";
 }
